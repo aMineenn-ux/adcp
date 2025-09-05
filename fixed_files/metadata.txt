@@ -1,0 +1,33 @@
+Hydrography Research Group 				
+Faculty of Earth Sciences and Technology				
+Institut Teknologi Bandung				
+----				
+Data			:	Current Profile
+Equipment		:	Teledyne Workhorse Monitor ADCP 600kHz
+Deployment		:	"Vessel Mounted, Down-ward Looking"
+Survey Area		:	"Alas Strait, Sumbawa, Indonesia"
+Vessel			:	M.V. Tenggara Supporter
+Start of Survey		:	25 09 2022
+End of Survey		:	27 09 2022
+Clock Time		:	UTC
+Geodetic Datum		:	WGS 84
+Velocity Ref		:	Bottom track
+Transducer Offset	:	0.74 m
+Bin Size		:	50 cm
+Blank after Trnsm	:	25 cm
+----				
+Column-1 (date)		: 	date in UTC (dd.mm.yyyy HH:mm:ss)
+Column-2 (ens)		:	Ensamble number
+Column-3 (dist)		:	Total Elapsed Distance through this ensemble (meter)
+Column-4 (lat)		:	Latitude of ensemble (decimal degree)
+Column-5 (lon)		:	Longitude of ensemble (decimal degree)
+Column-8 (h)		:	Depth from average 4 Beam depth reading (meter)
+Column-9 (hb)		:	Depth for present bin (include ADCP depth and blanking value; in meter)
+Column-10 (u)		:	East West vector velocity Magnitude (m/s)
+Column-11 (v)		:	North South vector velocity Magnitude (m/s)
+Column-12 (w)		:	Up Down vector velocity Magnitude (m/s)
+Column-13 (errv)    	:   	Variance error velocity (m/s)
+Column-14 (vel)		:	Total velocity Magnitude (m/s)
+Column-15 (dir)		:	Total velocity Direction (decimal degree)
+Column-16 (bs)		:	Backscatter from average 4 Beams (db)
+----
