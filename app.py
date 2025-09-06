@@ -5,6 +5,7 @@ import zipfile
 import shutil
 import os
 import pandas as pd
+import sys
 
 st.set_page_config(page_title="Pipeline ADCP", layout="wide")
 st.title("Pipeline ADCP - Reformat et Analyse Comparative")
@@ -72,7 +73,7 @@ if st.button("Lancer tout le traitement"):
 
         try:
             subprocess.run(
-                ["python", "reformat.py"],
+                 [sys.executable, "reformat.py"],
                 cwd=str(work_dir),
                 check=True,
                 capture_output=True,
@@ -89,7 +90,7 @@ if st.button("Lancer tout le traitement"):
         # -----------------------------
         try:
             result = subprocess.run(
-                ["python", "comparaison.py"],
+                [sys.executable, "comparaison.py"],
                 cwd=str(work_dir),
                 check=True,
                 capture_output=True,
