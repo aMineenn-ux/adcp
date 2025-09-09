@@ -578,24 +578,6 @@ def compare_all_transects(all_results_list):
     print(" ANALYSE COMPARATIVE TERMINÉE")
     print("="*50)
 # ... (votre code existant jusqu'au bloc principal) ...
-def get_date_from_filename(filename):
-    """
-    Extrait une date (au format YY-MM-DD) depuis un nom de fichier et la convertit 
-    en un objet datetime.
-    """
-    # Le pattern cherche une séquence de type '23-03-03'
-    pattern = r'(\d{2}-\d{2}-\d{2})'
-    match = re.search(pattern, filename)
-    
-    if match:
-        date_str = match.group(1)
-        # On convertit la chaîne en objet date. '%y' est pour l'année sur 2 chiffres.
-        return pd.to_datetime(date_str, format='%y-%m-%d')
-    else:
-        # Si aucune date n'est trouvée, on retourne None
-        return None
-# REMPLACEZ complètement votre ancien bloc if __name__ == "__main__": par celui-ci :
-
 if __name__ == "__main__":
 
     # Utilisation de chemins absolus et robustes
@@ -626,30 +608,39 @@ if __name__ == "__main__":
             fo = Path(file_in).name
             
             try:
-                # La fonction transect_proc continue de travailler comme avant.
-                # Elle retourne 'start_time' qui est t_sol (la date interne).
-                # Nous allons l'ignorer pour la comparaison.
-                results_df, internal_start_time = transect_proc(file_in, ftd)
-                
-                # NOUVEAU : On extrait la date unique depuis le nom du fichier
-                transect_date = get_date_from_filename(fo)
+                # On recharge le fichier transect en ignorant les 33 lignes d'en-tête
+                df_raw = pd.read_csv(file_in, sep="\t", skiprows=33)
 
-                if transect_date is None:
-                    print(f"   -> AVERTISSEMENT : Impossible d'extraire la date du nom de fichier '{fo}'. Ce fichier sera ignoré pour la comparaison.")
+                if "date" not in df_raw.columns:
+                    print(f"   -> AVERTISSEMENT : La colonne 'date' est absente dans '{fo}'. Fichier ignoré.")
                     continue
 
-                # MODIFIÉ : On utilise la date du nom de fichier pour la comparaison
+                # Conversion robuste de la colonne date
+                df_raw["date"] = pd.to_datetime(
+                    df_raw["date"], format="%d.%m.%Y %H:%M:%S", errors="coerce"
+                )
+
+                transect_date = df_raw["date"].min()
+                if pd.isna(transect_date):
+                    print(f"   -> AVERTISSEMENT : Impossible de convertir les dates du fichier '{fo}'. Fichier ignoré.")
+                    continue
+
+                # Passage dans ton traitement ADCP
+                results_df, internal_start_time = transect_proc(file_in, ftd)
+
+                # Ajout aux résultats pour comparaison
                 all_transect_results.append({
-                    'file_name': fo,
-                    'start_time': transect_date, # <--- On utilise la date unique du nom de fichier !
-                    'results_df': results_df
+                    "file_name": fo,
+                    "start_time": transect_date,  # <--- date trouvée dans dataset
+                    "results_df": results_df
                 })
+
             except Exception as e:
                 print(f"\n!!! ERREUR critique lors du traitement du fichier {fo}: {e}")
                 print("--- Le script passe au fichier suivant. ---")
                 continue
         
-        # Le reste du code appelle la comparaison, qui fonctionnera maintenant correctement
+        # Lancement de la comparaison finale
         if all_transect_results:
             compare_all_transects(all_transect_results)
         else:
