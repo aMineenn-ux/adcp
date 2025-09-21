@@ -87,7 +87,7 @@ if st.button("Iniciar todo o processamento (Velocidade & Backscatter)"):
             st.error(f"Erro crítico durante a reformatação:\n{e.stderr}")
             st.code(e.stdout)
             st.stop()
-
+        python_executable = sys.executable
         # -----------------------------
         # 4️⃣ Execução do comparaison.py (inalterado)
         # -----------------------------
