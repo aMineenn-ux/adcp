@@ -237,7 +237,7 @@ def analyze_transect_zones(df, gdf, file_name_base, output_folder, dist_div, dep
     df_copy['dist_norm'] = (df_copy['dist'] - dist_min) / (dist_max - dist_min)
     
     # Utiliser gdf pour interpoler le fond marin (méthode robuste)
-    seabed_depth_at_points = np.interp(df_copy['dist'], gdf['dist_tot'], gdf['z'])
+    seabed_depth_at_points = np.interp(df_copy['dist'], gdf['dist_tot'], gdf['h'])
     df_copy['depth_norm'] = df_copy[depth_col] / seabed_depth_at_points
     df_copy = df_copy[df_copy['depth_norm'] <= 1.0].copy()
 
@@ -301,6 +301,97 @@ def analyze_transect_zones(df, gdf, file_name_base, output_folder, dist_div, dep
     
     print(f"-> Graphique d'analyse des zones sauvegardé : {output_image_path}")
     print(f"-> Résultats des zones sauvegardés : {output_csv_path}")
+    
+    plt.close(fig)
+    return zone_means
+# =========================================================================
+# ====> NOUVELLE FONCTION : ANALYSE PAR ZONES POUR LE BACKSCATTER <====
+# =========================================================================
+def analyze_transect_zones_bs(df, gdf, file_name_base, output_folder, dist_div, depth_div):
+    """
+    Analyse le BACKSCATTER moyen par zones relatives.
+    C'est une copie de la fonction pour la vitesse, adaptée pour la colonne 'bs'.
+    """
+    print("\n* Analyse du backscatter moyen par zones relatives...")
+
+    # On vérifie si la colonne 'bs' existe avant de continuer
+    if 'bs' not in df.columns:
+        print("  -> AVERTISSEMENT : Colonne 'bs' non trouvée. Analyse par zones du backscatter ignorée.")
+        return pd.DataFrame() # Retourne un DataFrame vide
+
+    df_copy = df.copy().dropna(subset=['bs']) # On retire les lignes où 'bs' est nul
+    if df_copy.empty:
+        print("  -> AVERTISSEMENT : Aucune donnée de backscatter valide. Analyse par zones ignorée.")
+        return pd.DataFrame()
+
+    # --- 1. Normalisation (identique à la vitesse) ---
+    dist_min, dist_max = df_copy['dist'].min(), df_copy['dist'].max()
+    df_copy['dist_norm'] = (df_copy['dist'] - dist_min) / (dist_max - dist_min)
+    
+    # Utiliser gdf pour interpoler le fond marin (méthode robuste)
+    # NOTE: J'ai corrigé 'gdf.z' en 'gdf.h' car 'h' est la profondeur du fond dans gdf.
+    seabed_depth_at_points = np.interp(df_copy['dist'], gdf['dist_tot'], gdf['h'])
+    df_copy['depth_norm'] = df_copy['z'] / seabed_depth_at_points
+    df_copy = df_copy[df_copy['depth_norm'] <= 1.0].copy()
+
+    # --- 2. Assignation des zones (identique) ---
+    dist_labels = [f"Dist {int(dist_div[i]*100)}-{int(dist_div[i+1]*100)}%" for i in range(len(dist_div)-1)]
+    depth_labels = [f"Prof {int(depth_div[i]*100)}-{int(depth_div[i+1]*100)}%" for i in range(len(depth_div)-1)]
+    df_copy['dist_zone'] = pd.cut(df_copy['dist_norm'], bins=dist_div, labels=dist_labels, include_lowest=True)
+    df_copy['depth_zone'] = pd.cut(df_copy['depth_norm'], bins=depth_div, labels=depth_labels, include_lowest=True)
+
+    # --- 3. Calcul de la moyenne par zone pour 'bs' ---
+    df_copy['zone_id'] = df_copy['depth_zone'].astype(str) + " / " + df_copy['dist_zone'].astype(str)
+    # MODIFICATION PRINCIPALE : on groupe par 'bs' au lieu de 'vel'
+    zone_means = df_copy.groupby('zone_id')['bs'].mean().reset_index()
+    zone_means.rename(columns={'bs': 'bs_moyen_db'}, inplace=True) # Nouveau nom de colonne
+    
+    print("Résultats de l'analyse backscatter par zone :")
+    print(zone_means)
+    
+    # --- 4. Visualisation (adaptée pour 'bs') ---
+    num_dist_zones = len(dist_labels)
+    num_depth_zones = len(depth_labels)
+    mean_bs_matrix = np.full((num_depth_zones, num_dist_zones), np.nan)
+    
+    for i, d_label in enumerate(depth_labels):
+        for j, h_label in enumerate(dist_labels):
+            zone_name = f"{d_label} / {h_label}"
+            value = zone_means[zone_means['zone_id'] == zone_name]['bs_moyen_db']
+            if not value.empty:
+                mean_bs_matrix[i, j] = value.iloc[0]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    # On utilise un cmap adapté aux données séquentielles comme le backscatter
+    cmap = plt.cm.viridis 
+    cmap.set_bad(color='grey', alpha=0.5)
+    im = ax.imshow(mean_bs_matrix, cmap=cmap, aspect='auto')
+
+    for i in range(num_depth_zones):
+        for j in range(num_dist_zones):
+            value = mean_bs_matrix[i, j]
+            text_to_display = "N/A" if np.isnan(value) else f"{value:.1f} dB"
+            ax.text(j, i, text_to_display, ha="center", va="center", color="white", fontweight="bold")
+
+    ax.set_xticks(np.arange(num_dist_zones))
+    ax.set_yticks(np.arange(num_depth_zones))
+    ax.set_xticklabels(dist_labels)
+    ax.set_yticklabels(depth_labels)
+    
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    fig.suptitle(f"Analyse Backscatter par Zones - {file_name_base}", fontsize=14)
+    fig.tight_layout()
+
+    # Sauvegarde (noms de fichiers différents)
+    output_folder.mkdir(parents=True, exist_ok=True)
+    output_image_path = output_folder / f"{file_name_base}_bs_zone_analysis.png"
+    output_csv_path = output_folder / f"{file_name_base}_bs_zone_results.csv"
+    
+    fig.savefig(output_image_path, dpi=150, bbox_inches='tight')
+    zone_means.to_csv(output_csv_path, index=False)
+    
+    print(f"-> Graphique d'analyse des zones (BS) sauvegardé : {output_image_path}")
+    print(f"-> Résultats des zones (BS) sauvegardés : {output_csv_path}")
     
     plt.close(fig)
     return zone_means
@@ -472,6 +563,112 @@ def transect_proc(file_in, ftide):
     print(f'Process file {fo}, DONE! \n')
     return resultats_par_zone, t_sol
 # ... (après la fonction transect_proc) ...
+# =========================================================================
+# ====> NOUVELLE FONCTION : TRAITEMENT ET PLOTTING DÉDIÉS AU BACKSCATTER <====
+# =========================================================================
+def transect_proc_bs(file_in, ftide):
+    """
+    Traite un transect pour analyser et visualiser le BACKSCATTER.
+    Cette fonction est une version spécialisée de transect_proc.
+    """
+    fo = Path(file_in).name
+    print("-" * 20)
+    print(f"-> Début du traitement BACKSCATTER pour : {fo}")
+    print("-" * 20)
+
+    # --- 1. Lecture des données (commun aux deux analyses) ---
+    tide = pd.read_csv(ftide, parse_dates=['Time'], na_values=['*****'])
+    line = pd.read_csv(file_in, sep='\t', skiprows=33, parse_dates=['date'])
+
+    # Vérifier la présence de la colonne 'bs'
+    if 'bs' not in line.columns:
+        print(f"   -> AVERTISSEMET : Colonne 'bs' non trouvée dans {fo}. Le traitement du backscatter est annulé.")
+        # Retourne des DataFrames vides pour que le script principal ne plante pas
+        return pd.DataFrame(), None 
+
+    # --- 2. Traitement géospatial et marée (commun) ---
+    t_sol, t_eol, masked_tl, tidenew, xc, yc = process_tide(line, tide)
+    df, gdf, _, plot_brg = process_line(line, masked_tl) # L'array 'arr' n'est pas utilisé ici
+
+    # --- 3. Analyse par zones pour le BACKSCATTER ---
+    file_name_base = Path(file_in).stem
+    distance_divisions = [0, 1/3, 2/3, 1.0]
+    profondeur_divisions = [0, 1/3, 2/3, 1.0]
+    output_folder_zones_bs = OUTPATH / "Analyse_Zones_BS"
+    
+    resultats_par_zone_bs = analyze_transect_zones_bs(
+        df=df,
+        gdf=gdf,
+        file_name_base=file_name_base,
+        output_folder=output_folder_zones_bs,
+        dist_div=distance_divisions,
+        depth_div=profondeur_divisions
+    )
+
+    # --- 4. Plotting du BACKSCATTER ---
+    # Création d'un pivot_table spécifique pour le backscatter
+    bs_pivot = df.pivot_table(index='hb', columns='dist', values='bs')
+    
+    outpath = OUTPATH / "Transect_Image_Profile_BS" # Dossier de sortie dédié
+    outpath.mkdir(parents=True, exist_ok=True)
+    file_out = re.sub(r'(?i).txt', '_backscatter.jpg', fo)
+
+    linename = Path(file_in).stem
+    pattern = r'(\d{2}-\d{2}-\d{2})'
+    match = re.search(pattern, linename)
+    lineid = match.group(1) if match else linename
+    plt_name = f'Transect Backscatter {lineid}'
+    
+    fig, ax = plt.subplots(ncols=2, gridspec_kw={'width_ratios': [3, 1], 'wspace': 0.15})
+    fig.suptitle(plt_name + " - (" + t_sol.strftime('%d %B %Y') + ")")
+
+    # --- Sous-graphique 1 : Transect de Backscatter ---
+    # Utiliser pcolormesh pour une meilleure visualisation des données grillées
+    # Définir des limites pour la colorbar pour la rendre cohérente entre les graphiques
+    bs_min, bs_max = df['bs'].quantile(0.05), df['bs'].quantile(0.95)
+    
+    im = ax[0].pcolormesh(bs_pivot.columns, bs_pivot.index, bs_pivot.values, 
+                          cmap='viridis', vmin=bs_min, vmax=bs_max, shading='auto')
+    ax[0].invert_yaxis()
+
+    # Tracer le profil du fond marin
+    ax[0].plot(gdf.dist_tot, gdf.h, 'k', linewidth=1.5, label='Fond marin')
+    zmax = gdf.h.max() + 5
+    ax[0].fill_between(gdf.dist_tot, gdf.h, zmax, color='slategrey', alpha=0.7)
+    
+    # Configuration des axes et labels
+    lbl_start, lbl_end = label_orient(plot_brg)
+    bbox = dict(facecolor='white', edgecolor='black', boxstyle='round,pad=0.3')
+    ax[0].annotate(lbl_start, xy=(0, 0), xycoords='axes fraction', xytext=(-0.01, -0.25), bbox=bbox)
+    ax[0].annotate(lbl_end, xy=(0, 0), xycoords='axes fraction', xytext=(0.99, -0.25), bbox=bbox)
+    
+    ax[0].set_ylim(zmax, -5.0)
+    ax[0].set_xlim(-50, gdf.dist_tot.max() + 50)
+    ax[0].set_xlabel('Distance (m)')
+    ax[0].set_ylabel('Profondeur (m)')
+
+    # Colorbar
+    axins = inset_axes(ax[0], width="80%", height="5%", loc='lower center', borderpad=-5)
+    fig.colorbar(im, cax=axins, orientation="horizontal", label='Backscatter (dB)')
+
+    # --- Sous-graphique 2 : Marée (identique) ---
+    ax[1].plot(tidenew.index, tidenew.Height, color='deepskyblue')
+    ax[1].plot(masked_tl.index, masked_tl.Height, color='red')
+    ax[1].plot(xc, yc, marker='o', markersize=5, color='red', label='Heure de mesure')
+    ax[1].axhline(y=0, color='g', lw=0.75)
+    ax[1].legend(loc='lower right')
+    ax[1].set_xlabel('Heure (UTC)')
+    ax[1].set_ylabel('Hauteur (m)')
+    ax[1].grid(True, lw=0.3)
+    plt.setp(ax[1].get_xticklabels(), rotation=40, ha='right')
+
+    # Sauvegarde de l'image
+    fig.savefig(outpath / file_out, bbox_inches='tight', dpi=300)
+    plt.close(fig)
+    print(f"-> Image du backscatter sauvegardée : {file_out}")
+
+    print(f"-> Fin du traitement BACKSCATTER pour : {fo}")
+    return resultats_par_zone_bs, t_sol
 
 # =========================================================================
 # ====> NOUVELLE FONCTION POUR L'ANALYSE COMPARATIVE <====
@@ -577,10 +774,90 @@ def compare_all_transects(all_results_list):
     print("\n" + "="*50)
     print(" ANALYSE COMPARATIVE TERMINÉE")
     print("="*50)
+# =========================================================================
+# ====> NOUVELLE FONCTION : COMPARAISON GLOBALE POUR LE BACKSCATTER <====
+# =========================================================================
+def compare_all_transects_bs(all_results_list):
+    """
+    Analyse les résultats de backscatter de plusieurs transects pour comparer l'évolution.
+    """
+    print("\n" + "="*50)
+    print(" DÉBUT DE L'ANALYSE COMPARATIVE (BACKSCATTER)")
+    print("="*50)
+
+    if not all_results_list:
+        print("-> Aucune donnée de backscatter n'a été collectée. Analyse comparative annulée.")
+        return
+
+    # --- 1. Préparation des données ---
+    full_df_list = []
+    for result in all_results_list:
+        if result['results_df'].empty:
+            continue
+        temp_df = result['results_df'].copy()
+        temp_df['start_time'] = result['start_time']
+        full_df_list.append(temp_df)
+    
+    if not full_df_list:
+        print("-> Aucun des fichiers traités n'avait de données de zone backscatter valides. Analyse terminée.")
+        return
+        
+    comparison_df = pd.concat(full_df_list, ignore_index=True)
+
+    # Dossier de sortie différent pour le backscatter
+    output_dir = OUTPATH / "Analyse_Globale_BS"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # --- 2. Création du tableau comparatif ---
+    summary_table = comparison_df.pivot_table(
+        index='zone_id', 
+        columns='start_time', 
+        values='bs_moyen_db' # On utilise la colonne backscatter
+    ).round(2)
+    summary_table.columns = [col.strftime('%Y-%m-%d %H:%M') for col in summary_table.columns]
+    
+    summary_csv_path = output_dir / 'comparaison_bs_par_zone.csv'
+    summary_table.to_csv(summary_csv_path)
+    print(f"\n-> Tableau comparatif du backscatter sauvegardé : {summary_csv_path}")
+    print("Aperçu du tableau :")
+    print(summary_table)
+
+    # --- 3. Création des graphiques d'évolution par zone ---
+    print("\n-> Génération des graphiques d'évolution du backscatter par zone...")
+    zone_plot_dir = output_dir / 'graphiques_evolution_par_zone_bs'
+    zone_plot_dir.mkdir(exist_ok=True)
+    unique_zones = comparison_df['zone_id'].unique()
+
+    for zone in unique_zones:
+        zone_data = comparison_df[comparison_df['zone_id'] == zone].sort_values('start_time')
+        if zone_data.empty: continue
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        if len(zone_data) >= 2:
+            ax.plot(zone_data['start_time'], zone_data['bs_moyen_db'], marker='o', linestyle='-')
+        elif len(zone_data) == 1:
+            ax.scatter(zone_data['start_time'], zone_data['bs_moyen_db'], marker='o', s=50)
+
+        ax.set_title(f"Évolution du Backscatter Moyen\nZone: {zone}", fontsize=14)
+        ax.set_xlabel("Date et Heure du Transect", fontsize=10)
+        ax.set_ylabel("Backscatter Moyen (dB)", fontsize=10)
+        ax.grid(True, which='both', linestyle='--', linewidth=0.5)
+        fig.autofmt_xdate()
+        
+        safe_zone_name = zone.replace('/', '_').replace('%', '').replace(' ', '_').replace('-', '_')
+        plot_path = zone_plot_dir / f"evolution_bs_{safe_zone_name}.png"
+        fig.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+
+    print(f"-> {len(unique_zones)} graphiques d'évolution (BS) sauvegardés dans : {zone_plot_dir}")
+    print("\n" + "="*50)
+    print(" ANALYSE COMPARATIVE (BACKSCATTER) TERMINÉE")
+    print("="*50)    
 # ... (votre code existant jusqu'au bloc principal) ...
 if __name__ == "__main__":
 
-    # Utilisation de chemins absolus et robustes
+    # Utilisation de chemins absolus et robustes (inchangé)
     os.environ["ADCP_OUTPATH"] = str(Path(__file__).resolve().parent / "Orde_1 - CP_PRODUCT")
     script_dir = Path(__file__).resolve().parent
     transect_folder = script_dir / "Orde_1 - CP_PRODUCT/Transect_file"
@@ -602,12 +879,17 @@ if __name__ == "__main__":
     else:
         print("\nFichiers transects détectés pour l'analyse : \n", "\n".join(transect_file))
         
-        all_transect_results = []
+        # =========================================================================
+        # ====> MODIFICATION : Deux listes pour stocker les résultats séparément <====
+        # =========================================================================
+        all_transect_results_vel = []  # Pour la vitesse
+        all_transect_results_bs = []   # Pour le backscatter
 
         for file_in in transect_file:
             fo = Path(file_in).name
             
             try:
+                # --- Pré-vérification du fichier (logique conservée de votre code) ---
                 # On recharge le fichier transect en ignorant les 33 lignes d'en-tête
                 df_raw = pd.read_csv(file_in, sep="\t", skiprows=33)
 
@@ -616,32 +898,58 @@ if __name__ == "__main__":
                     continue
 
                 # Conversion robuste de la colonne date
-                df_raw["date"] = pd.to_datetime(
-                    df_raw["date"], format="%d.%m.%Y %H:%M:%S", errors="coerce"
-                )
-
-                transect_date = df_raw["date"].min()
-                if pd.isna(transect_date):
+                df_raw["date"] = pd.to_datetime(df_raw["date"], format="%d.%m.%Y %H:%M:%S", errors="coerce")
+                
+                # On utilise la date de début trouvée dans les données pour la cohérence
+                transect_start_date = df_raw["date"].min()
+                if pd.isna(transect_start_date):
                     print(f"   -> AVERTISSEMENT : Impossible de convertir les dates du fichier '{fo}'. Fichier ignoré.")
                     continue
 
-                # Passage dans ton traitement ADCP
-                results_df, internal_start_time = transect_proc(file_in, ftd)
+                # =========================================================================
+                # ====> MODIFICATION : Appels séquentiels aux deux fonctions de traitement <====
+                # =========================================================================
 
-                # Ajout aux résultats pour comparaison
-                all_transect_results.append({
-                    "file_name": fo,
-                    "start_time": transect_date,  # <--- date trouvée dans dataset
-                    "results_df": results_df
-                })
+                # --- 1. Lancement du traitement de la VITESSE ---
+                results_df_vel, _ = transect_proc(file_in, ftd) # start_time_vel n'est pas utilisé ici
+
+                # Ajout aux résultats de vitesse pour la comparaison finale
+                # On vérifie que le résultat n'est pas vide
+                if results_df_vel is not None and not results_df_vel.empty:
+                    all_transect_results_vel.append({
+                        "file_name": fo,
+                        "start_time": transect_start_date, # Utilise la date lue ici
+                        "results_df": results_df_vel
+                    })
+                
+                # --- 2. Lancement du traitement du BACKSCATTER ---
+                results_df_bs, _ = transect_proc_bs(file_in, ftd) # start_time_bs n'est pas utilisé ici
+
+                # Ajout aux résultats de backscatter pour la comparaison finale
+                if results_df_bs is not None and not results_df_bs.empty:
+                    all_transect_results_bs.append({
+                        "file_name": fo,
+                        "start_time": transect_start_date, # Utilise la même date
+                        "results_df": results_df_bs
+                    })
 
             except Exception as e:
                 print(f"\n!!! ERREUR critique lors du traitement du fichier {fo}: {e}")
                 print("--- Le script passe au fichier suivant. ---")
                 continue
         
-        # Lancement de la comparaison finale
-        if all_transect_results:
-            compare_all_transects(all_transect_results)
+        # =========================================================================
+        # ====> MODIFICATION : Lancement des deux analyses comparatives <====
+        # =========================================================================
+        
+        # Lancement de la comparaison finale pour la VITESSE
+        if all_transect_results_vel:
+            compare_all_transects(all_transect_results_vel)
         else:
-            print("\nAucun transect n'a pu être traité avec succès. Analyse comparative annulée.")
+            print("\nAucun transect n'a pu être traité avec succès pour la VITESSE. Analyse comparative annulée.")
+
+        # Lancement de la comparaison finale pour le BACKSCATTER
+        if all_transect_results_bs:
+            compare_all_transects_bs(all_transect_results_bs)
+        else:
+            print("\nAucun transect n'a pu être traité avec succès pour le BACKSCATTER. Analyse comparative annulée.")
