@@ -1,232 +1,225 @@
-import streamlit as st
-from pathlib import Path
-import subprocess
-import zipfile
-import shutil
-import os
 import pandas as pd
+import numpy as np
+import geopandas as gpd
+import glob
+from pathlib import Path
+import re
 
-st.set_page_config(page_title="Pipeline ADCP", layout="wide")
-st.title("Pipeline ADCP - Reformat e Análise Comparativa (Velocidade & Backscatter)") 
+def dir_vel(ens_df):
+    # calculate velocity and direction from vector
+    ens_df['vel'] = np.sqrt((ens_df['u5']**2)+(ens_df['v5']**2)).round(3)
+    ens_df['bearing'] = np.degrees(np.arctan(ens_df['u5']/ens_df['v5'])).round(3)
+    ens_df.loc[(ens_df['u5']>0) & (ens_df['v5']>0), 'dir'] = ens_df['bearing']
+    ens_df.loc[((ens_df['u5']>0) & (ens_df['v5']<0)) | ((ens_df['u5']<0) & (ens_df['v5']<0)), 'dir'] = (ens_df['bearing']+180) %360
+    ens_df.loc[(ens_df['u5']<0) & (ens_df['v5']>0), 'dir'] = (ens_df['bearing']+360) %360
+    return ens_df
 
-# -----------------------------
-# 1️⃣ Upload dos arquivos RAW (inalterado)
-# -----------------------------
-raw_files = st.file_uploader(
-    "Envie seus arquivos RAW (_ASC.txt)", type="txt", accept_multiple_files=True
-)
+def cal_avg_speed(df):
+        # remove duplicate data for recompute distance calculation
+    df2 = df.drop_duplicates(subset = 'ens')
+    df2.reset_index(inplace=True, drop=True)
 
-if st.button("Iniciar todo o processamento (Velocidade & Backscatter)"):
+    # define spatial geometry
+    gdf = gpd.GeoDataFrame(df2, geometry=gpd.points_from_xy(df2.lon, df2.lat),
+                           crs = 'EPSG:4326').to_crs('EPSG:32750')
+        
+    # recalculate distance by projected coordinate
+    gdf['dist_prev'] = 0
+    gdf['dist_tot'] = 0
+    for i in gdf.index[:-1]:
+        gdf.loc[i+1, 'dist_prev'] = gdf.loc[i, 'geometry'].distance(gdf.loc[i+1, 'geometry'])
+        
+    for j in gdf.index[:-1]:
+        gdf.loc[j+1, 'dist_tot'] = gdf.loc[j, 'dist_tot'] + gdf.loc[j+1, 'dist_prev']
 
-    if not raw_files:
-        st.error("É necessário enviar pelo menos os arquivos RAW.")
-        st.stop()
+    # round distance
+    gdf.dist_tot = round(gdf.dist_tot,3)
+
+    #replace with new distance
+    df['dist'] = df['dist'].map(dict(zip(gdf.dist, gdf.dist_tot)))
+    
+    df = df.reset_index(drop=True)
+    dfl = df.groupby('ens')
+    dum = []
+
+    for ens, ens_df in dfl:
+        depth_values = ens_df['hb'].round(1)
+        u_values = ens_df['u']
+        v_values = ens_df['v']
+        interval_depth = 0.1
+        interval_count = int(max(depth_values) / interval_depth)
+        interval_u_avg = [0] * interval_count
+        interval_v_avg = [0] * interval_count
+
+        for i in range(interval_count):
+            start_depth = i * interval_depth
+            end_depth = (i + 1) * interval_depth
+
+            interval_u_sum = 0
+            interval_v_sum = 0
+            count = 0
+
+            for depth, u, v in zip(depth_values, u_values, v_values):
+                if start_depth < depth <= end_depth:
+                    interval_u_sum += u
+                    interval_v_sum += v
+                    count += 1
+
+            if count > 0:
+                interval_u_avg[i] = interval_u_sum / count
+                interval_v_avg[i] = interval_v_sum / count
+
+        fifth_depths = [(i + 1) * interval_depth for i in range(interval_count)]
+        avg_speed_df = pd.DataFrame({'ens': [ens] * interval_count, 
+                                     'date': ens_df['date'].iloc[1],
+                                     'dist': ens_df['dist'].iloc[1],
+                                     'lat': ens_df['lat'].iloc[1],
+                                     'lon': ens_df['lon'].iloc[1],
+                                     'h': ens_df['h'].iloc[1],
+                                     'u5': interval_u_avg, 
+                                     'v5': interval_v_avg, 
+                                     'ens_h': fifth_depths})
+        dum.append(avg_speed_df)
+
+    avg_speed = pd.concat(dum, ignore_index=True)
+    dir_vel(avg_speed)
+    avg_speed = avg_speed.drop(['bearing'], axis=1)
+    return avg_speed
+
+# NOUVELLE FONCTION pour le backscatter 'bs'
+def cal_avg_backscatter(df):
+    """
+    Calcule le backscatter (bs) moyen par tranche de 5m.
+    Le style est identique à cal_avg_speed.
+    """
+    # La partie sur la distance est identique et peut être réutilisée
+    df2 = df.drop_duplicates(subset = 'ens')
+    df2.reset_index(inplace=True, drop=True)
+    gdf = gpd.GeoDataFrame(df2, geometry=gpd.points_from_xy(df2.lon, df2.lat),
+                           crs = 'EPSG:4326').to_crs('EPSG:32750')
+    gdf['dist_prev'] = 0
+    gdf['dist_tot'] = 0
+    for i in gdf.index[:-1]:
+        gdf.loc[i+1, 'dist_prev'] = gdf.loc[i, 'geometry'].distance(gdf.loc[i+1, 'geometry'])
+    for j in gdf.index[:-1]:
+        gdf.loc[j+1, 'dist_tot'] = gdf.loc[j, 'dist_tot'] + gdf.loc[j+1, 'dist_prev']
+    gdf.dist_tot = round(gdf.dist_tot,3)
+    # Dans la ligne ci-dessous, j'ai remplacé 'dist' par 'ens' dans zip pour plus de robustesse
+    df['dist'] = df['ens'].map(dict(zip(gdf.ens, gdf.dist_tot)))
+    
+    df = df.reset_index(drop=True)
+    dfl = df.groupby('ens')
+    dum = []
+
+    # La boucle de moyennage est adaptée pour 'bs'
+    for ens, ens_df in dfl:
+        depth_values = ens_df['hb'].round(1)
+        bs_values = ens_df['bs'] # On récupère les valeurs de 'bs'
+        interval_depth = 5
+        
+        if depth_values.empty or depth_values.isnull().all():
+            continue # On ignore les ensembles sans données de profondeur
+        
+        interval_count = int(max(depth_values) / interval_depth)
+        interval_bs_avg = [np.nan] * interval_count # Liste pour stocker les moyennes de 'bs'
+
+        for i in range(interval_count):
+            start_depth = i * interval_depth
+            end_depth = (i + 1) * interval_depth
+
+            interval_bs_sum = 0 # Somme pour 'bs'
+            count = 0
+
+            # On itère sur la profondeur et 'bs'
+            for depth, bs in zip(depth_values, bs_values):
+                if start_depth < depth <= end_depth:
+                    # On s'assure que bs n'est pas une valeur nulle (NaN)
+                    if pd.notna(bs):
+                        interval_bs_sum += bs
+                        count += 1
+
+            if count > 0:
+                interval_bs_avg[i] = interval_bs_sum / count
+
+        # Profondeur au centre de l'intervalle pour un meilleur plotting
+        fifth_depths = [(i + 0.5) * interval_depth for i in range(interval_count)]
+        avg_bs_df = pd.DataFrame({'ens': [ens] * interval_count, 
+                                     'date': ens_df['date'].iloc[0],
+                                     'dist': ens_df['dist'].iloc[0],
+                                     'lat': ens_df['lat'].iloc[0],
+                                     'lon': ens_df['lon'].iloc[0],
+                                     'h': ens_df['h'].iloc[0],
+                                     'bs_avg': interval_bs_avg, # Colonne résultat
+                                     'ens_h': fifth_depths})
+        dum.append(avg_bs_df)
+    
+    if not dum:
+        return pd.DataFrame() # Retourne un dataframe vide si rien n'a été traité
+
+    avg_bs = pd.concat(dum, ignore_index=True).dropna(subset=['bs_avg'])
+    # Pas besoin d'appeler dir_vel car nous n'avons pas de vecteurs u/v
+    return avg_bs
+def avg_5m(file_in):
+    print(f'Process file {fo}, Please Wait!')
+    outavg = Path('Orde_1 - CP_PRODUCT/Transect_file/Transect_average')
+    outavg.mkdir(parents=True, exist_ok=True)
+    avg_out = re.sub(r'(?i).txt', '_avg.csv', fo)
+
+    line = pd.read_csv(file_in, sep='\t', skiprows=33, parse_dates=['date'])
+    average = cal_avg_speed(line)
+
+    average.to_csv(outavg / avg_out, index=False)
+    print(f'* Finished save file {avg_out}')
+    return 
+# NOUVELLE FONCTION principale pour le BACKSCATTER
+def avg_5m_bs(file_in):
+    """
+    Fonction principale pour traiter le BACKSCATTER.
+    """
+    fo = Path(file_in).name
+    print(f'Process BACKSCATTER pour le fichier {fo}, Veuillez patienter !')
+    # On sauvegarde dans un dossier différent pour ne pas mélanger les fichiers
+    outavg = Path('Orde_1 - CP_PRODUCT/Transect_file/Transect_average_bs') 
+    outavg.mkdir(parents=True, exist_ok=True)
+    # On utilise un suffixe de fichier différent
+    avg_out = re.sub(r'(?i)\.txt$', '_bs_avg.csv', fo)
+
+    try:
+        line = pd.read_csv(file_in, sep='\t', skiprows=33, parse_dates=['date'])
+        
+        # Vérification cruciale : la colonne 'bs' existe-t-elle ?
+        if 'bs' not in line.columns:
+            print(f"! ATTENTION: Colonne 'bs' non trouvée dans le fichier {fo}. Traitement du backscatter ignoré.")
+            return
+
+        average_bs = cal_avg_backscatter(line)
+        
+        if not average_bs.empty:
+            average_bs.to_csv(outavg / avg_out, index=False, float_format='%.3f')
+            print(f'* Fichier de backscatter sauvegardé : {avg_out}')
+        else:
+            print(f'* Pas de données de backscatter à traiter pour {fo}')
+
+    except Exception as e:
+        print(f"ERREUR lors du traitement du backscatter pour {fo}: {e}")
+if __name__ == "__main__":
+
+    transect_file = glob.glob("Orde_1 - CP_PRODUCT/Transect_file/*.txt")
+     
+    if not transect_file:
+        print('Aucun fichier à convertir.')
+        exit()
     else:
-        st.info("Processamento em andamento, isso pode levar alguns minutos...")
-
-        # -----------------------------
-        # 2️⃣ Preparação da pasta de trabalho (inalterado)
-        # -----------------------------
-        work_dir = Path("streamlit_temp").resolve()
-        if work_dir.exists():
-            shutil.rmtree(work_dir)
-        work_dir.mkdir(parents=True)
-
-        raw_folder = work_dir / "Orde_0 - CP_RAW/PLAYBACK DATA"
-        raw_folder.mkdir(parents=True, exist_ok=True)
-        for f in raw_files:
-            (raw_folder / f.name).write_bytes(f.read())
-
-        # Arquivos fixos
-        fixed_files_dir = Path("fixed_files")
-        metadata_src = fixed_files_dir / "metadata.txt"
-        tide_src = fixed_files_dir / "tide_alas.csv"
-        output_dir = work_dir / "Orde_1 - CP_PRODUCT"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        if metadata_src.exists():
-            shutil.copy(metadata_src, output_dir / "metadata.txt")
-        if tide_src.exists():
-            shutil.copy(tide_src, output_dir / "tide_alas.csv")
-
-        # Copiar scripts necessários
-        scripts = ["reformat.py", "comparaison.py", "dav.py", "currentprop.py", "avg_5m.py"]
-        for s in scripts:
-            if Path(s).exists():
-                shutil.copy(s, work_dir / s)
-            else:
-                st.error(f"O script necessário '{s}' não foi encontrado. Certifique-se de que ele esteja na mesma pasta que o aplicativo Streamlit.")
-                st.stop()
-
-        # Ajustar caminhos em reformat.py e comparaison.py
-        for script in ["reformat.py", "comparaison.py"]:
-            script_path = work_dir / script
-            if script_path.exists():
-                text = script_path.read_text()
-                text = text.replace(
-                    "Path('Orde_1 - CP_PRODUCT')",
-                    "Path('.') / 'Orde_1 - CP_PRODUCT'"
-                )
-                script_path.write_text(text)
-
-        # -----------------------------
-        # 3️⃣ Execução do reformat.py (inalterado)
-        # -----------------------------
-        env = os.environ.copy()
-        env["ADCP_OUTPATH"] = str(output_dir)
-        progress_bar = st.progress(0, text="Etapa 1/2 : Reformatando os dados...")
-
-        try:
-            subprocess.run(
-                ["python", "reformat.py"],
-                cwd=str(work_dir), check=True, capture_output=True, text=True, env=env
-            )
-            st.success("Reformatação dos dados concluída!")
-            progress_bar.progress(50, text="Etapa 2/2 : Iniciando as análises...")
-        except subprocess.CalledProcessError as e:
-            st.error(f"Erro crítico durante a reformatação:\n{e.stderr}")
-            st.code(e.stdout)
-            st.stop()
-
-        # -----------------------------
-        # 4️⃣ Execução do comparaison.py (inalterado)
-        # -----------------------------
-        try:
-            result = subprocess.run(
-                ["python", "comparaison.py"],
-                cwd=str(work_dir), check=True, capture_output=True, text=True, env=env
-            )
-            st.success("Análises de Velocidade & Backscatter concluídas!")
-            progress_bar.progress(100, text="Processamento concluído!")
-            with st.expander("Ver logs de saída do script de análise"):
-                 st.text("STDOUT:\n" + result.stdout)
-                 st.text("STDERR:\n" + result.stderr)
-        except subprocess.CalledProcessError as e:
-            st.error("Erro crítico durante a análise comparativa!")
-            st.text("STDOUT:\n" + e.stdout)
-            st.text("STDERR:\n" + e.stderr)
-            st.stop()
-
-        # =========================================================================
-        # ====> MODIFICAÇÃO MAIOR : Nova estrutura de exibição dos resultados <====
-        # =========================================================================
-        
-        st.header("Visualização dos Resultados")
-        
-        tab1, tab2 = st.tabs(["📊 Transectos Individuais", "📈 Análise Comparativa Global"])
-
-        # Aba 1 : Transectos Individuais
-        with tab1:
-            st.subheader("Perfis de Velocidade e Backscatter para cada transecto")
-
-            # --- Caminhos para as pastas de resultados ---
-            img_folder_vel = output_dir / "Transect_Image_Profile"
-            img_folder_bs = output_dir / "Transect_Image_Profile_BS"
-
-            all_vel_imgs = sorted(img_folder_vel.glob("*.jpg")) if img_folder_vel.exists() else []
-            all_bs_imgs = sorted(img_folder_bs.glob("*.jpg")) if img_folder_bs.exists() else []
+        print("Fichiers de transect ASCII détectés : \n", "\n".join(transect_file))
+        for file_in in transect_file:
+            fo = Path(file_in).name # Déplacé ici pour n'être calculé qu'une fois
+            print("-" * 50)
             
-            # Criar um dicionário para associar imagens pelo nome base do arquivo
-            image_pairs = {}
-            for img_path in all_vel_imgs:
-                base_name = img_path.stem.replace('_avg5m', '')
-                image_pairs.setdefault(base_name, {})['vel'] = img_path
+            # Appel de la fonction originale pour la vitesse
+            avg_5m(file_in) 
             
-            for img_path in all_bs_imgs:
-                base_name = img_path.stem.replace('_backscatter', '')
-                image_pairs.setdefault(base_name, {})['bs'] = img_path
+            # NOUVEL APPEL : Lancement du traitement pour le backscatter
+            avg_5m_bs(file_in)
 
-            if not image_pairs:
-                st.warning("Nenhuma imagem de transecto individual foi gerada.")
-            else:
-                for base_name, paths in sorted(image_pairs.items()):
-                    with st.expander(f"Transecto : {base_name}"):
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.markdown("#### Perfil de Velocidade")
-                            if 'vel' in paths:
-                                st.image(str(paths['vel']), use_column_width=True, caption="Vetores de velocidade da corrente.")
-                            else:
-                                st.info("Nenhuma imagem de velocidade para este transecto.")
-                        
-                        with col2:
-                            st.markdown("#### Perfil de Backscatter")
-                            if 'bs' in paths:
-                                st.image(str(paths['bs']), use_column_width=True, caption="Intensidade do backscatter acústico (dB).")
-                            else:
-                                st.info("Nenhuma imagem de backscatter para este transecto.")
-
-        # Aba 2 : Análise Comparativa Global
-        with tab2:
-            st.subheader("Evolução temporal das médias por zona")
-            
-            col1, col2 = st.columns(2)
-
-            # --- Coluna da ESQUERDA : VELOCIDADE ---
-            with col1:
-                st.markdown("### 💨 Análise da Velocidade")
-                
-                # Caminhos para velocidade
-                global_img_folder_vel = output_dir / "Analyse_Globale/graphiques_evolution_par_zone"
-                comparison_csv_vel = output_dir / "Analyse_Globale/comparaison_vitesses_par_zone.csv"
-
-                # Exibição da tabela comparativa de velocidade
-                if comparison_csv_vel.exists():
-                    st.markdown("##### Tabela comparativa das velocidades médias (m/s)")
-                    df_comp_vel = pd.read_csv(comparison_csv_vel)
-                    st.dataframe(df_comp_vel)
-                else:
-                    st.warning("A tabela comparativa de velocidades não foi encontrada.")
-
-                # Exibição dos gráficos de evolução da velocidade
-                if global_img_folder_vel.exists():
-                    st.markdown("##### Gráficos de evolução por zona")
-                    global_imgs_vel = sorted(global_img_folder_vel.glob("*.png"))
-                    for img_path in global_imgs_vel:
-                        st.image(str(img_path), use_column_width=True)
-                else:
-                    st.warning("Nenhum gráfico comparativo para velocidade foi gerado.")
-            
-            # --- Coluna da DIREITA : BACKSCATTER ---
-            with col2:
-                st.markdown("### 🌊 Análise do Backscatter")
-
-                # Novos caminhos para o backscatter
-                global_img_folder_bs = output_dir / "Analyse_Globale_BS/graphiques_evolution_par_zone_bs"
-                comparison_csv_bs = output_dir / "Analyse_Globale_BS/comparaison_bs_par_zone.csv"
-                
-                # Exibição da tabela comparativa de backscatter
-                if comparison_csv_bs.exists():
-                    st.markdown("##### Tabela comparativa do backscatter médio (dB)")
-                    df_comp_bs = pd.read_csv(comparison_csv_bs)
-                    st.dataframe(df_comp_bs)
-                else:
-                    st.warning("A tabela comparativa de backscatter não foi encontrada.")
-                
-                # Exibição dos gráficos de evolução do backscatter
-                if global_img_folder_bs.exists():
-                    st.markdown("##### Gráficos de evolução por zona")
-                    global_imgs_bs = sorted(global_img_folder_bs.glob("*.png"))
-                    for img_path in global_imgs_bs:
-                        st.image(str(img_path), use_column_width=True)
-                else:
-                    st.warning("Nenhum gráfico comparativo para backscatter foi gerado.")
-
-        # -----------------------------
-        # 6️⃣ Download do ZIP completo (inalterado e funcional)
-        # -----------------------------
-        st.header("Download dos resultados completos")
-        zip_path = work_dir / "resultados_ADCP_completos.zip"
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # Compactar a pasta de saída que contém TODOS os resultados (velocidade e bs)
-            for file in output_dir.rglob("*"):
-                zf.write(file, file.relative_to(work_dir))
-
-        with open(zip_path, "rb") as f:
-            st.download_button(
-                label="📥 Baixar todos os resultados (CSV, SHP, imagens) em ZIP",
-                data=f,
-                file_name="resultados_ADCP_completos.zip",
-                mime="application/zip"
-            )
+        print("-" * 50)
+        print("Traitement de tous les fichiers terminé.")
