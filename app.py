@@ -68,7 +68,7 @@ if st.button("Iniciar todo o processamento (Velocidade & Backscatter)"):
                     "Path('.') / 'Orde_1 - CP_PRODUCT'"
                 )
                 script_path.write_text(text)
-
+        python_executable = sys.executable
         # -----------------------------
         # 3️⃣ Execução do reformat.py (inalterado)
         # -----------------------------
@@ -87,7 +87,7 @@ if st.button("Iniciar todo o processamento (Velocidade & Backscatter)"):
             st.error(f"Erro crítico durante a reformatação:\n{e.stderr}")
             st.code(e.stdout)
             st.stop()
-        python_executable = sys.executable
+        
         # -----------------------------
         # 4️⃣ Execução do comparaison.py (inalterado)
         # -----------------------------
