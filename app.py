@@ -5,28 +5,27 @@ import zipfile
 import shutil
 import os
 import pandas as pd
-import sys
 
 st.set_page_config(page_title="Pipeline ADCP", layout="wide")
-st.title("Pipeline ADCP - Reformat et Analyse Comparative")
+st.title("Pipeline ADCP - Reformat e Análise Comparativa (Velocidade & Backscatter)") 
 
 # -----------------------------
-# 1️⃣ Upload fichiers RAW
+# 1️⃣ Upload dos arquivos RAW (inalterado)
 # -----------------------------
 raw_files = st.file_uploader(
-    "Uploader vos fichiers RAW (_ASC.txt)", type="txt", accept_multiple_files=True
+    "Envie seus arquivos RAW (_ASC.txt)", type="txt", accept_multiple_files=True
 )
 
-if st.button("Lancer tout le traitement"):
+if st.button("Iniciar todo o processamento (Velocidade & Backscatter)"):
 
     if not raw_files:
-        st.error("Il faut uploader au moins les fichiers RAW.")
+        st.error("É necessário enviar pelo menos os arquivos RAW.")
         st.stop()
     else:
-        st.info("Traitement en cours, cela peut prendre plusieurs minutes...")
+        st.info("Processamento em andamento, isso pode levar alguns minutos...")
 
         # -----------------------------
-        # 2️⃣ Préparer le dossier de travail
+        # 2️⃣ Preparação da pasta de trabalho (inalterado)
         # -----------------------------
         work_dir = Path("streamlit_temp").resolve()
         if work_dir.exists():
@@ -38,7 +37,7 @@ if st.button("Lancer tout le traitement"):
         for f in raw_files:
             (raw_folder / f.name).write_bytes(f.read())
 
-        # Fichiers fixes
+        # Arquivos fixos
         fixed_files_dir = Path("fixed_files")
         metadata_src = fixed_files_dir / "metadata.txt"
         tide_src = fixed_files_dir / "tide_alas.csv"
@@ -50,119 +49,184 @@ if st.button("Lancer tout le traitement"):
         if tide_src.exists():
             shutil.copy(tide_src, output_dir / "tide_alas.csv")
 
-        # Copier les scripts
+        # Copiar scripts necessários
         scripts = ["reformat.py", "comparaison.py", "dav.py", "currentprop.py", "avg_5m.py"]
         for s in scripts:
-            shutil.copy(s, work_dir / s)
+            if Path(s).exists():
+                shutil.copy(s, work_dir / s)
+            else:
+                st.error(f"O script necessário '{s}' não foi encontrado. Certifique-se de que ele esteja na mesma pasta que o aplicativo Streamlit.")
+                st.stop()
 
-        # Ajuster chemins dans reformat.py et comparaison.py
+        # Ajustar caminhos em reformat.py e comparaison.py
         for script in ["reformat.py", "comparaison.py"]:
             script_path = work_dir / script
-            text = script_path.read_text()
-            text = text.replace(
-                "Path('Orde_1 - CP_PRODUCT')",
-                "Path('.') / 'Orde_1 - CP_PRODUCT'"
-            )
-            script_path.write_text(text)
+            if script_path.exists():
+                text = script_path.read_text()
+                text = text.replace(
+                    "Path('Orde_1 - CP_PRODUCT')",
+                    "Path('.') / 'Orde_1 - CP_PRODUCT'"
+                )
+                script_path.write_text(text)
 
         # -----------------------------
-        # 3️⃣ Lancer reformat.py
+        # 3️⃣ Execução do reformat.py (inalterado)
         # -----------------------------
         env = os.environ.copy()
         env["ADCP_OUTPATH"] = str(output_dir)
+        progress_bar = st.progress(0, text="Etapa 1/2 : Reformatando os dados...")
 
         try:
             subprocess.run(
-                 [sys.executable, "reformat.py"],
-                cwd=str(work_dir),
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env
+                ["python", "reformat.py"],
+                cwd=str(work_dir), check=True, capture_output=True, text=True, env=env
             )
-            st.success("Reformat terminé !")
+            st.success("Reformatação dos dados concluída!")
+            progress_bar.progress(50, text="Etapa 2/2 : Iniciando as análises...")
         except subprocess.CalledProcessError as e:
-            st.error(f"Erreur lors du reformat :\n{e.stderr}")
+            st.error(f"Erro crítico durante a reformatação:\n{e.stderr}")
+            st.code(e.stdout)
             st.stop()
 
         # -----------------------------
-        # 4️⃣ Lancer comparaison.py
+        # 4️⃣ Execução do comparaison.py (inalterado)
         # -----------------------------
         try:
             result = subprocess.run(
-                [sys.executable, "comparaison.py"],
-                cwd=str(work_dir),
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env
+                ["python", "comparaison.py"],
+                cwd=str(work_dir), check=True, capture_output=True, text=True, env=env
             )
-            st.success("Analyse comparative terminée !")
-            st.text("STDOUT:\n" + result.stdout)
-            st.text("STDERR:\n" + result.stderr)
+            st.success("Análises de Velocidade & Backscatter concluídas!")
+            progress_bar.progress(100, text="Processamento concluído!")
+            with st.expander("Ver logs de saída do script de análise"):
+                 st.text("STDOUT:\n" + result.stdout)
+                 st.text("STDERR:\n" + result.stderr)
         except subprocess.CalledProcessError as e:
-            st.error("Erreur lors de l'analyse comparative !")
+            st.error("Erro crítico durante a análise comparativa!")
             st.text("STDOUT:\n" + e.stdout)
             st.text("STDERR:\n" + e.stderr)
             st.stop()
 
-        # -----------------------------
-        # 5️⃣ Navigation par onglets
-        # -----------------------------
-        tab1, tab2 = st.tabs(["Transects Individuels", "Analyse Comparative Globale"])
+        # =========================================================================
+        # ====> MODIFICAÇÃO MAIOR : Nova estrutura de exibição dos resultados <====
+        # =========================================================================
+        
+        st.header("Visualização dos Resultados")
+        
+        tab1, tab2 = st.tabs(["📊 Transectos Individuais", "📈 Análise Comparativa Global"])
 
-        # Onglet Transects Individuels
+        # Aba 1 : Transectos Individuais
         with tab1:
-            st.header("Transects Individuels")
-            transect_img_folder = output_dir / "Transect_Image_Profile"
-            transect_csv_folder = output_dir / "Transect_file"
+            st.subheader("Perfis de Velocidade e Backscatter para cada transecto")
 
-            if transect_img_folder.exists():
-                transect_imgs = sorted(transect_img_folder.glob("*.jpg"))
-                for img_path in transect_imgs:
-                    file_stem = img_path.stem
-                    with st.expander(f"{file_stem}"):
-                        st.subheader(f"Fichier : {file_stem}")
-                        st.image(str(img_path), use_column_width=True)
+            # --- Caminhos para as pastas de resultados ---
+            img_folder_vel = output_dir / "Transect_Image_Profile"
+            img_folder_bs = output_dir / "Transect_Image_Profile_BS"
 
-                        # Optionnel : afficher CSV associé
-                        csv_file = transect_csv_folder / f"{file_stem.replace('_avg5m','test')}.csv"
-                        if csv_file.exists():
-                            df = pd.read_csv(csv_file)
-                            st.dataframe(df.head(10))
+            all_vel_imgs = sorted(img_folder_vel.glob("*.jpg")) if img_folder_vel.exists() else []
+            all_bs_imgs = sorted(img_folder_bs.glob("*.jpg")) if img_folder_bs.exists() else []
+            
+            # Criar um dicionário para associar imagens pelo nome base do arquivo
+            image_pairs = {}
+            for img_path in all_vel_imgs:
+                base_name = img_path.stem.replace('_avg5m', '')
+                image_pairs.setdefault(base_name, {})['vel'] = img_path
+            
+            for img_path in all_bs_imgs:
+                base_name = img_path.stem.replace('_backscatter', '')
+                image_pairs.setdefault(base_name, {})['bs'] = img_path
+
+            if not image_pairs:
+                st.warning("Nenhuma imagem de transecto individual foi gerada.")
             else:
-                st.warning("Aucune image individuelle générée.")
+                for base_name, paths in sorted(image_pairs.items()):
+                    with st.expander(f"Transecto : {base_name}"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown("#### Perfil de Velocidade")
+                            if 'vel' in paths:
+                                st.image(str(paths['vel']), use_column_width=True, caption="Vetores de velocidade da corrente.")
+                            else:
+                                st.info("Nenhuma imagem de velocidade para este transecto.")
+                        
+                        with col2:
+                            st.markdown("#### Perfil de Backscatter")
+                            if 'bs' in paths:
+                                st.image(str(paths['bs']), use_column_width=True, caption="Intensidade do backscatter acústico (dB).")
+                            else:
+                                st.info("Nenhuma imagem de backscatter para este transecto.")
 
-        # Onglet Analyse Comparative Globale
+        # Aba 2 : Análise Comparativa Global
         with tab2:
-            st.header("Analyse Comparative Globale")
-            global_img_folder = output_dir / "Analyse_Globale/graphiques_evolution_par_zone"
-            comparison_csv = output_dir / "Analyse_Globale/comparaison_vitesses_par_zone.csv"
+            st.subheader("Evolução temporal das médias por zona")
+            
+            col1, col2 = st.columns(2)
 
-            if global_img_folder.exists():
-                global_imgs = sorted(global_img_folder.glob("*.png"))
-                for img_path in global_imgs:
-                    st.subheader(img_path.stem)
-                    st.image(str(img_path), use_column_width=True)
-            else:
-                st.warning("Aucune image comparative globale générée.")
+            # --- Coluna da ESQUERDA : VELOCIDADE ---
+            with col1:
+                st.markdown("### 💨 Análise da Velocidade")
+                
+                # Caminhos para velocidade
+                global_img_folder_vel = output_dir / "Analyse_Globale/graphiques_evolution_par_zone"
+                comparison_csv_vel = output_dir / "Analyse_Globale/comparaison_vitesses_par_zone.csv"
 
-            if comparison_csv.exists():
-                st.subheader("Tableau comparatif des vitesses par zone")
-                df_comp = pd.read_csv(comparison_csv)
-                st.dataframe(df_comp)
+                # Exibição da tabela comparativa de velocidade
+                if comparison_csv_vel.exists():
+                    st.markdown("##### Tabela comparativa das velocidades médias (m/s)")
+                    df_comp_vel = pd.read_csv(comparison_csv_vel)
+                    st.dataframe(df_comp_vel)
+                else:
+                    st.warning("A tabela comparativa de velocidades não foi encontrada.")
+
+                # Exibição dos gráficos de evolução da velocidade
+                if global_img_folder_vel.exists():
+                    st.markdown("##### Gráficos de evolução por zona")
+                    global_imgs_vel = sorted(global_img_folder_vel.glob("*.png"))
+                    for img_path in global_imgs_vel:
+                        st.image(str(img_path), use_column_width=True)
+                else:
+                    st.warning("Nenhum gráfico comparativo para velocidade foi gerado.")
+            
+            # --- Coluna da DIREITA : BACKSCATTER ---
+            with col2:
+                st.markdown("### 🌊 Análise do Backscatter")
+
+                # Novos caminhos para o backscatter
+                global_img_folder_bs = output_dir / "Analyse_Globale_BS/graphiques_evolution_par_zone_bs"
+                comparison_csv_bs = output_dir / "Analyse_Globale_BS/comparaison_bs_par_zone.csv"
+                
+                # Exibição da tabela comparativa de backscatter
+                if comparison_csv_bs.exists():
+                    st.markdown("##### Tabela comparativa do backscatter médio (dB)")
+                    df_comp_bs = pd.read_csv(comparison_csv_bs)
+                    st.dataframe(df_comp_bs)
+                else:
+                    st.warning("A tabela comparativa de backscatter não foi encontrada.")
+                
+                # Exibição dos gráficos de evolução do backscatter
+                if global_img_folder_bs.exists():
+                    st.markdown("##### Gráficos de evolução por zona")
+                    global_imgs_bs = sorted(global_img_folder_bs.glob("*.png"))
+                    for img_path in global_imgs_bs:
+                        st.image(str(img_path), use_column_width=True)
+                else:
+                    st.warning("Nenhum gráfico comparativo para backscatter foi gerado.")
 
         # -----------------------------
-        # 6️⃣ Télécharger ZIP complet
+        # 6️⃣ Download do ZIP completo (inalterado e funcional)
         # -----------------------------
-        zip_path = work_dir / "resultats_ADCP.zip"
+        st.header("Download dos resultados completos")
+        zip_path = work_dir / "resultados_ADCP_completos.zip"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            # Compactar a pasta de saída que contém TODOS os resultados (velocidade e bs)
             for file in output_dir.rglob("*"):
                 zf.write(file, file.relative_to(work_dir))
 
         with open(zip_path, "rb") as f:
             st.download_button(
-                label="Télécharger tous les résultats (CSV, SHP, images) en ZIP",
+                label="📥 Baixar todos os resultados (CSV, SHP, imagens) em ZIP",
                 data=f,
-                file_name="resultats_ADCP.zip",
+                file_name="resultados_ADCP_completos.zip",
+                mime="application/zip"
             )
