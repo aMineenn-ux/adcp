@@ -5,7 +5,7 @@ import zipfile
 import shutil
 import os
 import pandas as pd
-
+import sys
 st.set_page_config(page_title="Pipeline ADCP", layout="wide")
 st.title("Pipeline ADCP - Reformat e Análise Comparativa (Velocidade & Backscatter)") 
 
@@ -78,7 +78,7 @@ if st.button("Iniciar todo o processamento (Velocidade & Backscatter)"):
 
         try:
             subprocess.run(
-                ["python", "reformat.py"],
+                [python_executable, "reformat.py"],
                 cwd=str(work_dir), check=True, capture_output=True, text=True, env=env
             )
             st.success("Reformatação dos dados concluída!")
@@ -93,7 +93,7 @@ if st.button("Iniciar todo o processamento (Velocidade & Backscatter)"):
         # -----------------------------
         try:
             result = subprocess.run(
-                ["python", "comparaison.py"],
+                [python_executable,"comparaison.py"],
                 cwd=str(work_dir), check=True, capture_output=True, text=True, env=env
             )
             st.success("Análises de Velocidade & Backscatter concluídas!")
